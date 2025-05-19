@@ -10,6 +10,8 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using Google.Apis.Auth;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace SecureAuthApi.Controllers
 {
@@ -21,16 +23,20 @@ namespace SecureAuthApi.Controllers
         private readonly SignInManager<ApplicationUser> _signInManager;
         private readonly IConfiguration _configuration;
         private readonly IEmailSender _emailSender;
+        private readonly ILogger<AccountController> _logger;
 
-        public AccountController(UserManager<ApplicationUser> userManager,
-                                 SignInManager<ApplicationUser> signInManager,
-                                 IConfiguration configuration,
-                                 IEmailSender emailSender)
+        public AccountController(
+            UserManager<ApplicationUser> userManager,
+            SignInManager<ApplicationUser> signInManager,
+            IConfiguration configuration,
+            IEmailSender emailSender,
+            ILogger<AccountController> logger)
         {
             _userManager = userManager;
             _signInManager = signInManager;
             _configuration = configuration;
             _emailSender = emailSender;
+            _logger = logger;
         }
 
         // Rejestracja użytkownika z wysłaniem linku weryfikacyjnego email
@@ -62,7 +68,20 @@ namespace SecureAuthApi.Controllers
             await _emailSender.SendEmailAsync(user.Email, "Potwierdź swój email",
                 $"Kliknij w poniższy link, aby potwierdzić swój email: <a href='{confirmationLink}'>Potwierdź email</a>");
 
-            return Ok(new { Message = "Rejestracja zakończona. Sprawdź email, aby potwierdzić konto." });
+            // Generowanie tokena JWT dla nowego użytkownika
+            var jwtToken = GenerateJwtToken(user);
+
+            var response = new
+            {
+                Token = jwtToken,
+                Message = "Rejestracja zakończona. Sprawdź email, aby potwierdzić konto.",
+                Success = true
+            };
+
+            // Logowanie odpowiedzi
+            _logger.LogInformation("Register response: {Response}", JsonSerializer.Serialize(response));
+
+            return Ok(response);
         }
 
         // Potwierdzanie adresu email (kliknięcie w link wysłany na email)
@@ -103,7 +122,12 @@ namespace SecureAuthApi.Controllers
                 return Unauthorized("Nieprawidłowe dane logowania");
 
             var token = GenerateJwtToken(user);
-            return Ok(new { Token = token });
+            return Ok(new AuthResponse 
+            { 
+                Token = token,
+                Message = "Login successful",
+                Success = true
+            });
         }
 
         // Żądanie resetowania hasła – wysłanie linku resetującego na email
