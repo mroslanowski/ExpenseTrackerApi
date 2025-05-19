@@ -7,14 +7,24 @@ using SecureAuthApi.Data;
 using SecureAuthApi.Models;
 using SecureAuthApi.Services;
 using Microsoft.AspNetCore.Identity.UI.Services;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Konfiguracja bazy danych (upewnij siê, ¿e connection string znajduje siê w appsettings.json)
+// Configure URLs
+builder.WebHost.UseUrls("https://localhost:7001", "http://localhost:5296");
+
+// Add services to the container
+builder.Services.AddControllers();
+
+// Add CORS - more permissive for development
+builder.Services.AddCors();
+
+// Konfiguracja bazy danych (upewnij siÄ™, Å¼e connection string znajduje siÄ™ w appsettings.json)
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Konfiguracja Identity – ustawienia hase³, blokady, unikalnoœci emaila oraz wymóg potwierdzenia konta
+// Konfiguracja Identity ustawienia haseÅ‚, blokady, unikalnoÅ›ci emaila oraz wymaga potwierdzenia konta
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     options.Password.RequireDigit = true;
@@ -55,26 +65,46 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
     };
 })
-// Dodanie obs³ugi logowania przez Google – w appsettings.json podaj swoje dane
+// Dodanie obsÅ‚ugi logowania przez Google w appsettings.json podaj swoje dane
 .AddGoogle(googleOptions =>
 {
     googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"];
     googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
 });
 
-builder.Services.AddControllers();
-
-// Rejestracja serwisu wysy³aj¹cego emaile (w tym przyk³adzie prosty serwis wypisuj¹cy dane do konsoli)
+// Rejestracja serwisu wysyÅ‚ajÄ…cego emaile (w tym przykÅ‚adzie prosty serwis wypisujÄ…cy dane do konsoli)
 builder.Services.AddTransient<IEmailSender, EmailSender>();
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
+{
     app.UseDeveloperExceptionPage();
+    
+    // Development CORS policy
+    app.UseCors(x => x
+        .SetIsOriginAllowed(origin => true)
+        .AllowAnyMethod()
+        .AllowAnyHeader()
+        .AllowCredentials());
+}
 
-app.UseHttpsRedirection();
 app.UseRouting();
+app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 app.Run();
+
+public class AuthResponse
+{
+    [JsonPropertyName("token")]
+    public required string Token { get; set; }
+
+    [JsonPropertyName("message")]
+    public required string Message { get; set; }
+
+    [JsonPropertyName("success")]
+    public bool Success { get; set; }
+}
