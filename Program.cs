@@ -5,26 +5,32 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using SecureAuthApi.Data;
 using SecureAuthApi.Models;
-using SecureAuthApi.Services;
 using Microsoft.AspNetCore.Identity.UI.Services;
 using System.Text.Json.Serialization;
+using Microsoft.OpenApi.Models;
+using SecureAuthApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure URLs
+// 1. Configure URLs
 builder.WebHost.UseUrls("https://localhost:7001", "http://localhost:5296");
 
-// Add services to the container
-builder.Services.AddControllers();
+// 2. Add Controllers + JSON options
+builder.Services.AddControllers()
+    .AddJsonOptions(opts =>
+    {
+        // aby serializować AuthResponse poprawnie
+        opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+    });
 
-// Add CORS - more permissive for development
+// 3. CORS (luźniejsze na etapie dev)
 builder.Services.AddCors();
 
-// Konfiguracja bazy danych (upewnij się, że connection string znajduje się w appsettings.json)
+// 4. DbContext z SQL Server
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Konfiguracja Identity ustawienia haseł, blokady, unikalności emaila oraz wymaga potwierdzenia konta
+// 5. ASP.NET Identity
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     options.Password.RequireDigit = true;
@@ -37,16 +43,15 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
 
     options.User.RequireUniqueEmail = true;
-
-    // Wymuszamy potwierdzenie adresu email przed logowaniem
     options.SignIn.RequireConfirmedEmail = true;
 })
 .AddEntityFrameworkStores<ApplicationDbContext>()
 .AddDefaultTokenProviders();
 
-// Konfiguracja JWT
+// 6. Authentication – JWT + Google
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey = jwtSettings["Secret"];
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -65,38 +70,67 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey))
     };
 })
-// Dodanie obsługi logowania przez Google w appsettings.json podaj swoje dane
 .AddGoogle(googleOptions =>
 {
     googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"];
     googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
 });
 
-// Rejestracja serwisu wysyłającego emaile (w tym przykładzie prosty serwis wypisujący dane do konsoli)
+// 7. E-mail sender
 builder.Services.AddTransient<IEmailSender, EmailSender>();
+
+// 8. Swagger / OpenAPI
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "ExpenseTracker API",
+        Version = "v1",
+        Description = "API do zarządzania wydatkami — kategorie i wydatki"
+    });
+});
+
+// 9. ExpenseTracker services
+builder.Services.AddScoped<ICategoryService, CategoryService>();
+builder.Services.AddScoped<IExpenseService, ExpenseService>();
 
 var app = builder.Build();
 
+// 10. HTTP pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
-    
-    // Development CORS policy
+
+    // Enable CORS for dev
     app.UseCors(x => x
         .SetIsOriginAllowed(origin => true)
         .AllowAnyMethod()
         .AllowAnyHeader()
         .AllowCredentials());
+
+    // Enable Swagger only in Development
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "ExpenseTracker API V1");
+        c.RoutePrefix = "swagger"; // dostęp pod /swagger
+    });
 }
 
 app.UseRouting();
 app.UseHttpsRedirection();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
 app.Run();
 
+/// <summary>
+/// Helper do zwrotu tokena JWT przy logowaniu
+/// </summary>
 public class AuthResponse
 {
     [JsonPropertyName("token")]
