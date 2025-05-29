@@ -2,11 +2,18 @@
 using SecureAuthApi.Data;
 using SecureAuthApi.Models;
 using SecureAuthApi.Models.Dtos;
+using Microsoft.Extensions.Logging;
 
 public class ExpenseService : IExpenseService
 {
     private readonly ApplicationDbContext _db;
-    public ExpenseService(ApplicationDbContext db) => _db = db;
+    private readonly ILogger<ExpenseService> _logger;
+
+    public ExpenseService(ApplicationDbContext db, ILogger<ExpenseService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task<IEnumerable<Expense>> GetAllAsync(string userId) =>
         await _db.Expenses
@@ -21,9 +28,19 @@ public class ExpenseService : IExpenseService
 
     public async Task<Expense> CreateAsync(Expense expense)
     {
-        _db.Expenses.Add(expense);
-        await _db.SaveChangesAsync();
-        return expense;
+        try
+        {
+            _logger.LogInformation("Adding expense to database: {@Expense}", expense);
+            _db.Expenses.Add(expense);
+            await _db.SaveChangesAsync();
+            _logger.LogInformation("Expense saved successfully with ID: {Id}", expense.Id);
+            return expense;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error saving expense to database: {@Expense}", expense);
+            throw;
+        }
     }
 
     public async Task UpdateAsync(Expense expense)
