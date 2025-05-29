@@ -17,10 +17,10 @@ builder.WebHost.UseUrls("https://localhost:7001", "http://localhost:5296");
 
 // 2. Add Controllers + JSON options
 builder.Services.AddControllers()
-    .AddJsonOptions(opts =>
+    .AddJsonOptions(options =>
     {
-        // aby serializować AuthResponse poprawnie
-        opts.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+        options.JsonSerializerOptions.WriteIndented = true;
     });
 
 // 3. CORS (luźniejsze na etapie dev)

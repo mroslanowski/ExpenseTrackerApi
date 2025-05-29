@@ -54,52 +54,41 @@ namespace SecureAuthApi.Controllers
             };
 
             var result = await _userManager.CreateAsync(user, model.Password);
-            if (!result.Succeeded)
-                return BadRequest(result.Errors);
-
-            // Generowanie tokena dla potwierdzenia email
-            var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-
-            // Generowanie linku potwierdzającego email (używając Url.Action)
-            var confirmationLink = Url.Action(nameof(ConfirmEmail), "Account",
-                new { userId = user.Id, token = token }, Request.Scheme);
-
-            // Wysłanie emaila z linkiem weryfikacyjnym
-            await _emailSender.SendEmailAsync(user.Email, "Potwierdź swój email",
-                $"Kliknij w poniższy link, aby potwierdzić swój email: <a href='{confirmationLink}'>Potwierdź email</a>");
-
-            // Generowanie tokena JWT dla nowego użytkownika
-            var jwtToken = GenerateJwtToken(user);
-
-            var response = new
+            if (result.Succeeded)
             {
-                Token = jwtToken,
-                Message = "Rejestracja zakończona. Sprawdź email, aby potwierdzić konto.",
-                Success = true
-            };
+                _logger.LogInformation("User created successfully with ID: {UserId}", user.Id);
 
-            // Logowanie odpowiedzi
-            _logger.LogInformation("Register response: {Response}", JsonSerializer.Serialize(response));
+                // Generowanie tokena weryfikacyjnego
+                var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+                var confirmationLink = Url.Action("ConfirmEmail", "Account",
+                    new { userId = user.Id, token = token }, Request.Scheme);
 
-            return Ok(response);
+                // Wysłanie emaila
+                await _emailSender.SendEmailAsync(user.Email, "Potwierdź swój email",
+                    $"Kliknij w link, aby potwierdzić swój email: {confirmationLink}");
+
+                return Ok(new { message = "Rejestracja zakończona sukcesem. Sprawdź swoją skrzynkę email." });
+            }
+
+            return BadRequest(result.Errors);
         }
 
         // Potwierdzanie adresu email (kliknięcie w link wysłany na email)
-        [HttpGet("confirmemail")]
+        [HttpGet("confirm-email")]
         public async Task<IActionResult> ConfirmEmail(string userId, string token)
         {
-            if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(token))
-                return BadRequest("Nieprawidłowe dane");
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(token))
+                return BadRequest(new { message = "Nieprawidłowy link weryfikacyjny" });
 
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null)
-                return NotFound("Użytkownik nie został znaleziony");
+                return BadRequest(new { message = "Użytkownik nie istnieje" });
 
             var result = await _userManager.ConfirmEmailAsync(user, token);
             if (result.Succeeded)
-                return Ok("Email został pomyślnie potwierdzony");
+                return Ok(new { message = "Email potwierdzony pomyślnie" });
 
-            return BadRequest("Błąd przy potwierdzaniu emaila");
+            return BadRequest(new { message = "Nie udało się potwierdzić emaila" });
         }
 
         // Standardowe logowanie – uwzględnia potwierdzenie email
@@ -111,22 +100,39 @@ namespace SecureAuthApi.Controllers
 
             var user = await _userManager.FindByEmailAsync(model.Email);
             if (user == null)
-                return Unauthorized("Nieprawidłowe dane logowania");
+                return Unauthorized(new AuthResponse 
+                { 
+                    Token = string.Empty,
+                    Message = "Nieprawidłowy email lub hasło",
+                    Success = false
+                });
 
-            // Sprawdzenie, czy email został potwierdzony
             if (!await _userManager.IsEmailConfirmedAsync(user))
-                return Unauthorized("Email nie został potwierdzony");
+                return Unauthorized(new AuthResponse 
+                { 
+                    Token = string.Empty,
+                    Message = "Email nie został potwierdzony",
+                    Success = false
+                });
 
             var result = await _signInManager.CheckPasswordSignInAsync(user, model.Password, false);
-            if (!result.Succeeded)
-                return Unauthorized("Nieprawidłowe dane logowania");
+            if (result.Succeeded)
+            {
+                _logger.LogInformation("User logged in successfully with ID: {UserId}", user.Id);
+                var token = GenerateJwtToken(user);
+                return Ok(new AuthResponse 
+                { 
+                    Token = token,
+                    Message = "Logowanie zakończone sukcesem",
+                    Success = true
+                });
+            }
 
-            var token = GenerateJwtToken(user);
-            return Ok(new AuthResponse 
+            return Unauthorized(new AuthResponse 
             { 
-                Token = token,
-                Message = "Login successful",
-                Success = true
+                Token = string.Empty,
+                Message = "Nieprawidłowy email lub hasło",
+                Success = false
             });
         }
 
@@ -172,40 +178,66 @@ namespace SecureAuthApi.Controllers
         }
 
         // Logowanie przez Google – weryfikacja tokena otrzymanego z klienta
-        [HttpPost("googlelogin")]
+        [HttpPost("google-login")]
         public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginModel model)
         {
-            // Weryfikacja przekazanego tokena od Google
-            GoogleJsonWebSignature.Payload payload;
             try
             {
-                payload = await GoogleJsonWebSignature.ValidateAsync(model.IdToken);
-            }
-            catch
-            {
-                return BadRequest("Nieprawidłowy token Google");
-            }
-
-            // Próba znalezienia użytkownika po emailu
-            var user = await _userManager.FindByEmailAsync(payload.Email);
-            if (user == null)
-            {
-                // Jeśli użytkownika nie ma, tworzony jest nowy – email ustawiony jako potwierdzony
-                user = new ApplicationUser
+                var settings = new GoogleJsonWebSignature.ValidationSettings()
                 {
-                    UserName = payload.Email,
-                    Email = payload.Email,
-                    EmailConfirmed = true,
-                    FullName = payload.Name
+                    Audience = new[] { _configuration["Authentication:Google:ClientId"] }
                 };
-                var result = await _userManager.CreateAsync(user);
-                if (!result.Succeeded)
-                    return BadRequest(result.Errors);
-            }
 
-            // Generowanie tokena JWT
-            var token = GenerateJwtToken(user);
-            return Ok(new { Token = token });
+                var payload = await GoogleJsonWebSignature.ValidateAsync(model.IdToken, settings);
+                _logger.LogInformation("Google login successful for email: {Email}, User ID: {UserId}", 
+                    payload.Email, payload.Subject);
+
+                // Próba znalezienia użytkownika po emailu
+                var user = await _userManager.FindByEmailAsync(payload.Email);
+                if (user == null)
+                {
+                    // Jeśli użytkownika nie ma, tworzony jest nowy – email ustawiony jako potwierdzony
+                    user = new ApplicationUser
+                    {
+                        UserName = payload.Email,
+                        Email = payload.Email,
+                        EmailConfirmed = true,
+                        FullName = payload.Name
+                    };
+                    var result = await _userManager.CreateAsync(user);
+                    if (!result.Succeeded)
+                    {
+                        _logger.LogError("Failed to create user from Google login: {Errors}", 
+                            string.Join(", ", result.Errors.Select(e => e.Description)));
+                        return BadRequest(new AuthResponse 
+                        { 
+                            Token = string.Empty,
+                            Message = string.Join(", ", result.Errors.Select(e => e.Description)),
+                            Success = false
+                        });
+                    }
+                    _logger.LogInformation("Created new user from Google login with ID: {UserId}", user.Id);
+                }
+
+                // Generowanie tokena JWT
+                var token = GenerateJwtToken(user);
+                return Ok(new AuthResponse 
+                { 
+                    Token = token,
+                    Message = "Logowanie przez Google zakończone sukcesem",
+                    Success = true
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during Google login");
+                return BadRequest(new AuthResponse 
+                { 
+                    Token = string.Empty,
+                    Message = "Nieprawidłowy token Google",
+                    Success = false
+                });
+            }
         }
 
         // Metoda pomocnicza do generowania tokena JWT
@@ -215,11 +247,14 @@ namespace SecureAuthApi.Controllers
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["Secret"]));
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
+            _logger.LogInformation("Generating JWT token for user ID: {UserId}", user.Id);
+
             var claims = new[]
             {
                 new Claim(JwtRegisteredClaimNames.Sub, user.Email),
                 new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                new Claim(ClaimTypes.NameIdentifier, user.Id)
+                new Claim(ClaimTypes.NameIdentifier, user.Id),
+                new Claim(ClaimTypes.Email, user.Email)
             };
 
             var token = new JwtSecurityToken(
