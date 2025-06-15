@@ -220,4 +220,50 @@ public class ExpensesController : ControllerBase
 
         return Ok(summaries);
     }
+
+    /// <summary>
+    /// GET api/Expenses/summary/categories/range?startDate=2025-05-15&endDate=2025-06-15
+    /// </summary>
+    [HttpGet("summary/categories/range")]
+    public async Task<ActionResult<IEnumerable<CategoryExpenseSummaryDto>>> GetCategorySummaryByDateRange(
+        [FromQuery] DateTime startDate,
+        [FromQuery] DateTime endDate)
+    {
+        var summaries = await _context.Expenses
+            .Where(e => e.UserId == CurrentUserId && e.Date >= startDate && e.Date <= endDate)
+            .GroupBy(e => new { e.CategoryId, e.Category.Name })
+            .Select(g => new CategoryExpenseSummaryDto
+            {
+                CategoryId = g.Key.CategoryId,
+                CategoryName = g.Key.Name,
+                TotalAmount = g.Sum(e => e.Amount)
+            })
+            .ToListAsync();
+
+        return Ok(summaries);
+    }
+
+    /// <summary>
+    /// GET api/Expenses/summary/monthly/range?startDate=2025-05-15&endDate=2025-06-15
+    /// </summary>
+    [HttpGet("summary/monthly/range")]
+    public async Task<ActionResult<IEnumerable<MonthlyExpenseTotalDto>>> GetMonthlyTotalsByDateRange(
+        [FromQuery] DateTime startDate,
+        [FromQuery] DateTime endDate)
+    {
+        var monthlyTotals = await _context.Expenses
+            .Where(e => e.UserId == CurrentUserId && e.Date >= startDate && e.Date <= endDate)
+            .GroupBy(e => new { e.Date.Year, e.Date.Month })
+            .Select(g => new MonthlyExpenseTotalDto
+            {
+                Year = g.Key.Year,
+                Month = g.Key.Month,
+                TotalAmount = g.Sum(e => e.Amount)
+            })
+            .OrderBy(x => x.Year)
+            .ThenBy(x => x.Month)
+            .ToListAsync();
+
+        return Ok(monthlyTotals);
+    }
 }
