@@ -127,18 +127,3 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
-
-/// <summary>
-/// Helper do zwrotu tokena JWT przy logowaniu
-/// </summary>
-public class AuthResponse
-{
-    [JsonPropertyName("token")]
-    public required string Token { get; set; }
-
-    [JsonPropertyName("message")]
-    public required string Message { get; set; }
-
-    [JsonPropertyName("success")]
-    public bool Success { get; set; }
-}
